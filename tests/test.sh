@@ -7,6 +7,10 @@
 # on macOS exercises bash 3.2.
 #
 #   bash tests/test.sh
+#
+# Many variables are only read inside the check strings, which shellcheck
+# cannot see:
+# shellcheck disable=SC2034
 set -u
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -42,7 +46,14 @@ UUID=01a195e3-567d-7ee3-a95d-30a2901a57c5
 
 pass=0 fail=0 skip=0
 ok() { pass=$((pass + 1)); echo "  ok    $1"; }
-bad() { fail=$((fail + 1)); echo "  FAIL  $1"; [ -n "${2:-}" ] && echo "        $2"; }
+# A failure also shows what the launcher last wrote to stderr (the reason it
+# refused a run, say), from the newest of the files the helpers keep it in.
+bad() {
+  fail=$((fail + 1)); echo "  FAIL  $1"; [ -n "${2:-}" ] && echo "        $2"
+  local e; e=$(ls -t "$TMP"/*.err 2>/dev/null | head -n 1)
+  [ -n "$e" ] && [ -s "$e" ] && sed -e 's/^/        stderr: /' "$e" | head -n 3
+  return 0
+}
 check() { if eval "$2"; then ok "$1"; else bad "$1" "condition: $2"; fi; }
 skipped() { skip=$((skip + 1)); echo "  skip  $1"; }
 has_arg() { grep -qxF -- "$1" "$STUB_ARGS"; }
@@ -101,8 +112,7 @@ new_run() {
 # Runs `exec` on a fresh run dir; sets RUN and CODE.
 run_exec() {
   RUN=$(new_run)
-  "$SH" "$RUNNER" exec "$RUN" "$@" >/dev/null 2>&1
-  # shellcheck disable=SC2034  # read inside check strings
+  "$SH" "$RUNNER" exec "$RUN" "$@" >/dev/null 2>"$TMP/run.err"
   CODE=$?
 }
 

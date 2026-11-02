@@ -122,8 +122,8 @@ ctl_clean() {
   LC_ALL=C tr -d '\000-\010\013-\037\177' | LC_ALL=C sed \
     -e "s/$(printf '\302')[$(printf '\200')-$(printf '\237')]//g" \
     -e "s/$(printf '\330\234')//g" \
-    -e "s/$e2$x80[$(printf '\216\217\250\251\252\253\254\255\256')]//g" \
-    -e "s/$e2$x81[$(printf '\246\247\250\251')]//g"
+    -e "s/${e2}${x80}[$(printf '\216\217\250\251\252\253\254\255\256')]//g" \
+    -e "s/${e2}${x81}[$(printf '\246\247\250\251')]//g"
 }
 
 # Git against an untrusted repository, outside Codex's sandbox: no fsmonitor, no
@@ -224,8 +224,7 @@ resolve_run() {
 # With "gitdir" as $2, checks git directory $1, which -w writes outside the
 # sandbox, against the same protected places (no temporary folders).
 check_workdir() {
-  local wd=$1 mode=${2:-} p pa w h
-  w=$(lower "$wd")
+  local wd=$1 mode=${2:-} p pa h
   [ "$wd" != / ] || die "refusing a filesystem root as working directory: $wd"
   if $WINDOWS && [[ $wd =~ ^/[a-zA-Z]/?$ || $wd =~ ^//[^/]+/[^/]+/?$ ]]; then
     die "refusing a drive or network share root as working directory: $(winpath "$wd")"
@@ -263,7 +262,7 @@ check_workdir() {
                      "$docs/PowerShell" "$docs/WindowsPowerShell")
   # Configuration that XDG programs (autostart entries included) and zsh read
   # where these variables say, rather than in the home folder.
-  local x d l found
+  local x
   [[ ${XDG_CONFIG_HOME-}${XDG_DATA_HOME-}${XDG_CONFIG_DIRS-}${ZDOTDIR-} != *$'\n'* ]] \
     || die "an XDG or ZDOTDIR variable has a newline in it; use -s read-only"
   for x in "${XDG_CONFIG_HOME-}" "${XDG_DATA_HOME-}" "${ZDOTDIR-}"; do
