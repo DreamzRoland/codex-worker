@@ -775,7 +775,7 @@ $WINDOWS || chmod 755 "$STUCK"
 # The retry finds the runs root through the recorded runs-root file.
 env -u CODEX_WORKER_RUNS "$SH" "$ROOT/install.sh" --uninstall --purge >"$TMP/purge.err" 2>&1
 check "purge succeeds" '[ $? = 0 ]'
-ls -d "$RUNS"/2026* >> "$TMP/purge.err" 2>/dev/null
+{ echo "left after purge:"; for d in "$RUNS"/2026*; do [ -e "$d" ] && echo "$(basename "$d"): $(ls -A "$d" | tr '\n' ' ')"; done; } > "$TMP/purge-left.err" 2>/dev/null
 check "purge removes run directories" '[ -z "$(ls -d "$RUNS"/2026* 2>/dev/null)" ]'
 check "purge keeps unrelated files in the runs root" '[ -f "$RUNS/keep.txt" ]'
 check "purge removes the marker and runs-root" '[ ! -e "$RUNS/.codex-worker-runs" ] && [ ! -e "$CLAUDE_CONFIG_DIR/codex-worker" ]'
