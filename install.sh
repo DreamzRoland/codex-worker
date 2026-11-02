@@ -31,6 +31,18 @@ warn() { echo "  warn  $*"; }
 is_windows() { case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) return 0 ;; *) return 1 ;; esac; }
 winpath() { if command -v cygpath >/dev/null 2>&1; then cygpath -m "$1"; else printf '%s\n' "$1"; fi; }
 owns_agent() { [ -f "$AGENT" ] && grep -qF "$MARKER" "$AGENT"; }
+# True if pid $1 still looks like this run dir's launcher.
+launcher_alive() {
+  local pid=$1 run=$2 args=""
+  [[ $pid =~ ^[0-9]+$ ]] || return 1
+  kill -0 "$pid" 2>/dev/null || return 1
+  args=$(ps -p "$pid" -o args= 2>/dev/null) || return 0
+  [ -n "$args" ] || return 0
+  case $args in
+    *"codex-run.sh exec "*"$run"*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
 # Paths end up inside a shell command and the agent's instructions; refuse the
 # characters that would need escaping there instead of trying to escape them.
 safe_path() {
@@ -93,7 +105,7 @@ purge_runs() {
     read_state "$d/pid" && pid=$REPLY && read_state "$d/repo" && repo=$REPLY \
       || { warn "cannot read the state files in $d; fix access and purge again"; failed=1; continue; }
     # A run still in progress could change its worktree while it is removed.
-    if [ ! -f "$d/exit" ] && [[ $pid =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null; then
+    if [ ! -f "$d/exit" ] && launcher_alive "$pid" "$d"; then
       warn "$d is still running (pid $pid); not removing it"; failed=1; continue
     fi
     # Codex runs in a process group of its own, which can outlive the launcher.
