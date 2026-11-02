@@ -1,0 +1,67 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            shell: bash
+          - os: macos-latest
+            shell: /bin/bash   # the system bash 3.2 and BSD tools
+          - os: windows-latest
+            shell: bash        # Git Bash
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 20
+
+      - name: Syntax checks
+        shell: bash
+        run: |
+          ${{ matrix.shell }} --version | head -1
+          ${{ matrix.shell }} -n bin/codex-run.sh
+          ${{ matrix.shell }} -n install.sh
+          ${{ matrix.shell }} -n tests/test.sh
+          node --check hooks/codex-guard.mjs
+          node -e 'JSON.parse(require("fs").readFileSync("schemas/findings.schema.json","utf8"))'
+
+      - name: Test suite
+        shell: bash
+        run: ${{ matrix.shell }} tests/test.sh
+
+      - name: PowerShell installer (Windows)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $errors = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile("$PWD\install.ps1", [ref]$null, [ref]$errors)
+          if ($errors) { $errors; exit 1 }
+          $env:CLAUDE_CONFIG_DIR = Join-Path $env:RUNNER_TEMP 'claude'
+          $env:CODEX_WORKER_RUNS = (Join-Path $env:RUNNER_TEMP 'runs') -replace '\\', '/'
+          .\install.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          .\install.ps1 --uninstall --purge
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: ShellCheck
+        run: shellcheck --severity=warning bin/codex-run.sh install.sh tests/test.sh
