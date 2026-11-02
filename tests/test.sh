@@ -210,6 +210,7 @@ run_exec -d "$TMP/deeptarget"
 check "once those links are gone the folder is fine" '[ "$CODE" = 0 ]'
 # Concurrent write runs: a live claim (its launcher is this shell) on $REPO
 # refuses a run in $REPO/sub, and one in $REPO itself (whose git that run uses).
+# shellcheck disable=SC2034  # read inside check expressions
 claim_exec() { RUN=$(new_run); "$SH" "$RUNNER" exec "$RUN" "$@" >/dev/null 2>"$TMP/claim.err"; CODE=$?; }
 LIVE=$(new_run); printf 'pid %s\nw %s\nr %s\n' "$$" "$REPO" "$REPO" > "$LIVE/claim"
 mkdir -p "$REPO/sub"
@@ -308,6 +309,7 @@ echo 0 > "$LIVE8/exit"
 unlist "$TMP/regw2/runs"; unlist "$TMP/regw/runs"; unlist "$TMP/arch"
 # A real run records its Codex process group, which is alive while it runs.
 RUN=$(new_run); STUB_SLEEP=8 "$SH" "$RUNNER" exec "$RUN" -d "$REPO" >/dev/null 2>&1 & BGRUN=$!
+# shellcheck disable=SC2034  # loop variable intentionally ignored
 for i in $(seq 1 100); do grep -q '^pgid ' "$RUN/claim" 2>/dev/null && break; sleep 0.2; done
 pg_alive() { local pg; for pg in $(sed -n 's/^pgid //p' "$1"); do kill -0 -- "-$pg" 2>/dev/null && return 0; done; return 1; }
 check "a run records its Codex process group, alive while Codex runs" 'pg_alive "$RUN/claim"'
@@ -330,7 +332,9 @@ if [ "$GIT_MINOR" -ge 42 ]; then
   mkdir -p "$TMP/xdgw/repo" && git -C "$TMP/xdgw/repo" init -q && echo x > "$TMP/xdgw/repo/f" \
     && git -C "$TMP/xdgw/repo" add f && git -C "$TMP/xdgw/repo" commit -qm init \
     && git -C "$TMP/xdgw/repo" worktree add -q "$TMP/xdgwt" >/dev/null 2>&1
+  # shellcheck disable=SC2034  # read inside a check string
   RUN=$(new_run); XDG_CONFIG_HOME="$TMP/xdgw" "$SH" "$RUNNER" exec "$RUN" -w -s read-only -d "$TMP/xdgwt" >/dev/null 2>"$TMP/claim.err"; TCODE=$?
+  : "$TCODE"
   check "-w refuses a repository whose git directory is in XDG_CONFIG_HOME" '[ "$TCODE" = 64 ] && grep -q "refusing -w" "$TMP/claim.err"'
 fi
 # Changed paths keep marks that reorder text escaped in the receipt.
@@ -351,6 +355,7 @@ check "receipts drop terminal controls from Codex's answer" \
 # ends at a drive root in native spelling too.
 # (TMP here is the test folder, not the system's: it is unset for the walk.)
 warn_in="$(wp "$SYS_TMP")/runs/x" warn_out_of="$(wp "$TMP")/runs"
+# shellcheck disable=SC2034  # read inside a check string
 warn_out=$(unset TMP; eval "$(sed -n '/^warn_temp() {/,/^}/p' "$ROOT/install.sh")"
            warn() { printf 'WARN %s\n' "$*"; }; is_windows() { $WINDOWS; }; winpath() { wp "$1"; }
            warn_temp "$warn_in" "the runs root"; warn_temp "$warn_out_of" "the runs root")
@@ -543,6 +548,7 @@ check "-w notes that uncommitted work is not included" 'grep -q "uncommitted cha
 if ! $WINDOWS; then
   # shellcheck disable=SC2034  # read inside a check string
   RUN=$(new_run); START=$(date +%s)
+  : "$START"
   STUB_SLEEP=30 "$SH" "$RUNNER" exec "$RUN" -d "$REPO" >/dev/null 2>&1 &
   LPID=$!; sleep 1; kill -TERM "$LPID"; wait "$LPID" 2>/dev/null
   check "an interrupt stops Codex promptly and records exit 130" \
@@ -588,7 +594,9 @@ check "allows: a trailing newline" 'allows Bash "\"$L\" new
 "'
 # A hook that times out lets the command through, so the guard stays linear.
 LONG_EVENT=$(L="$L" node -e 'process.stdout.write(JSON.stringify({tool_name: "Bash", tool_input: {command: "\"" + process.env.L + "\"" + " ".repeat(300000) + "new" + " ".repeat(300000) + "x\u00a0"}}))')
+# shellcheck disable=SC2034  # read inside a check string
 T0=$(date +%s); LONG_RC=$(guard_raw "$LONG_EVENT"); T1=$(date +%s)
+: "$T0" "$LONG_RC" "$T1"
 check "the guard decides on a command with 600000 blanks within seconds" '[ "$LONG_RC" = 2 ] && [ $((T1 - T0)) -le 5 ]'
 for lead in "$(printf '\302\240')" "$(printf '\357\273\277')" "$(printf '\343\200\200')" "$(printf '\r')"; do
   check "blocks a launcher led by $(printf '%s' "$lead" | od -An -tx1 | tr -d ' \n')" 'blocks Bash "$lead\"$L\" new" && blocks Bash "${lead}$L new"'
