@@ -529,21 +529,23 @@ claims_lock_error() {
 # True while the run of claim file $1 may still write or run git: it has no
 # exit code yet (the launcher stops what is left of Codex before writing one)
 # and a process of its Codex process group is alive, or its launcher is alive,
-# or that launcher died while starting Codex (within 60 s).
+# or that launcher died while starting Codex before its group was recorded
+# (within 60 s; once a group is recorded, that group alone tells).
 claim_live() {
-  local line pid="" start="" now
+  local line pid="" start="" now grouped=false
   [ ! -e "${1%/claim}/exit" ] || return 1
   {
     while IFS= read -r line; do
       case $line in
         "pid "*) pid=${line#pid } ;;
         "starting "*) start=${line#starting } ;;
-        "pgid "*) [[ ${line#pgid } =~ ^[0-9]+$ ]] && kill -0 -- "-${line#pgid }" 2>/dev/null && return 0 ;;
+        "pgid "*) grouped=true
+                  [[ ${line#pgid } =~ ^[0-9]+$ ]] && kill -0 -- "-${line#pgid }" 2>/dev/null && return 0 ;;
       esac
     done < "$1"
   } 2>/dev/null
   [[ $pid =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null && return 0
-  [[ $start =~ ^[0-9]+$ ]] && now=$(date +%s) && [ $((now - start)) -lt 60 ]
+  ! $grouped && [[ $start =~ ^[0-9]+$ ]] && now=$(date +%s) && [ $((now - start)) -lt 60 ]
 }
 
 # True if path $1 is folder $2 or lies inside it, by spelling or by identity.

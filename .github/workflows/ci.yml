@@ -39,6 +39,15 @@ jobs:
           node --check hooks/codex-guard.mjs
           node -e 'JSON.parse(require("fs").readFileSync("schemas/findings.schema.json","utf8"))'
 
+      - name: Probe /var/tmp (diagnostic)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          ls -ld / /var /tmp /var/tmp /private /private/var /private/tmp /private/var/tmp || true
+          readlink /var /tmp /var/tmp || true
+          id; echo "TMPDIR=${TMPDIR-}"; getconf DARWIN_USER_TEMP_DIR || true
+          /bin/bash -c 'WINDOWS=false; eval "$(sed -n -e "/^phys_path() {/,/^}/p" -e "/^unc_root() {/,/^}/p" -e "/^posix_spelling() {/,/^}/p" -e "/^abspath() {/,/^}/p" bin/codex-run.sh)"; set -x; out=$(phys_path /var/tmp); echo "rc=$? out=[$out]"; a=${out%%$'"'"'\n'"'"'*}; [ -d "$a" ] && echo dir; [ -x "$a" ] && echo exec; abspath "$a"; echo "abspath rc=$?"'
+
       - name: Test suite
         shell: bash
         run: ${{ matrix.shell }} tests/test.sh

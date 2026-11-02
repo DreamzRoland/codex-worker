@@ -557,11 +557,16 @@ if ! $WINDOWS; then
   LPID=$!; sleep 1; kill -TERM "$LPID"; wait "$LPID" 2>/dev/null
   check "an interrupt stops Codex promptly and records exit 130" \
     '[ "$(cat "$RUN/exit" 2>/dev/null)" = 130 ] && [ $(( $(date +%s) - START )) -lt 15 ]'
+  # A launcher killed while Codex still runs: "may still run" (75) while its
+  # process group lives, "died" (70) once that has ended.
   RUN=$(new_run)
   STUB_SLEEP=3 "$SH" "$RUNNER" exec "$RUN" -d "$REPO" >/dev/null 2>&1 &
   LPID=$!; sleep 1; kill -KILL "$LPID"; wait "$LPID" 2>/dev/null
   "$SH" "$RUNNER" receipt "$RUN" >/dev/null 2>&1
-  check "a killed launcher is reported as died, not running" '[ $? = 70 ]'
+  check "a killed launcher whose Codex still runs is reported as possibly running" '[ $? = 75 ]'
+  sleep 4
+  "$SH" "$RUNNER" receipt "$RUN" >/dev/null 2>&1
+  check "a killed launcher is reported as died once its Codex has ended" '[ $? = 70 ]'
   sleep 3
 else skipped "signal handling (POSIX only)"; fi
 
@@ -768,8 +773,9 @@ elif ! $WINDOWS; then
 fi
 $WINDOWS || chmod 755 "$STUCK"
 # The retry finds the runs root through the recorded runs-root file.
-env -u CODEX_WORKER_RUNS "$SH" "$ROOT/install.sh" --uninstall --purge >/dev/null 2>&1
+env -u CODEX_WORKER_RUNS "$SH" "$ROOT/install.sh" --uninstall --purge >"$TMP/purge.err" 2>&1
 check "purge succeeds" '[ $? = 0 ]'
+ls -d "$RUNS"/2026* >> "$TMP/purge.err" 2>/dev/null
 check "purge removes run directories" '[ -z "$(ls -d "$RUNS"/2026* 2>/dev/null)" ]'
 check "purge keeps unrelated files in the runs root" '[ -f "$RUNS/keep.txt" ]'
 check "purge removes the marker and runs-root" '[ ! -e "$RUNS/.codex-worker-runs" ] && [ ! -e "$CLAUDE_CONFIG_DIR/codex-worker" ]'
@@ -822,9 +828,10 @@ if ! $WINDOWS; then
   check "launcher treats drive-letter paths as relative off Windows" '[ $? = 64 ]'
 fi
 if ! $WINDOWS && [ "$GIT_MINOR" -ge 42 ]; then
-  LR=$(new_repo linked-refs); mkdir -p "$TMP/elsewhere" "$LR/.git/refs/heads"; ln -s "$TMP/elsewhere" "$LR/.git/refs/heads/codex"
+  # (a folder of its own: $TMP/elsewhere holds a run dir from an earlier test)
+  LR=$(new_repo linked-refs); mkdir -p "$TMP/refs-elsewhere" "$LR/.git/refs/heads"; ln -s "$TMP/refs-elsewhere" "$LR/.git/refs/heads/codex"
   run_exec -d "$LR" -w
-  check "-w refuses git metadata dirs that link elsewhere" '[ "$CODE" = 66 ] && [ -z "$(ls -A "$TMP/elsewhere")" ]'
+  check "-w refuses git metadata dirs that link elsewhere" '[ "$CODE" = 66 ] && [ -z "$(ls -A "$TMP/refs-elsewhere")" ]'
   LF=$(new_repo linked-file); echo "# outside" > "$TMP/outside-packed"; ln -s "$TMP/outside-packed" "$LF/.git/packed-refs"
   run_exec -d "$LF" -w
   check "-w refuses linked git metadata files (packed-refs, config, reftable...)" '[ "$CODE" = 66 ] && [ "$(cat "$TMP/outside-packed")" = "# outside" ]'
