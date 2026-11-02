@@ -547,6 +547,19 @@ claim_live() {
   [[ $start =~ ^[0-9]+$ ]] && now=$(date +%s) && [ $((now - start)) -lt 60 ]
 }
 
+# True if pid $1 is still this launcher's process for run dir $2.
+launcher_alive() {
+  local pid=$1 run=$2 args=""
+  [[ $pid =~ ^[0-9]+$ ]] || return 1
+  kill -0 "$pid" 2>/dev/null || return 1
+  args=$(ps -p "$pid" -o args= 2>/dev/null) || return 0
+  [ -n "$args" ] || return 0
+  case $args in
+    *"codex-run.sh exec "*"$run"*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 # True if path $1 is folder $2 or lies inside it, by spelling or by identity.
 within() { is_under "$(lower "$2")" "$(lower "$1")" || { [ -d "$2" ] && held_in "$1" "$2"; }; }
 same_place() { [ "$1" = "$2" ] || [ "$1" -ef "$2" ]; }
@@ -1374,7 +1387,7 @@ cmd_receipt() {
   if [ ! -f "$RUN/exit" ]; then
     local pid=""
     [ -f "$RUN/pid" ] && read -r pid < "$RUN/pid"
-    if [ -n "$pid" ] && ! kill -0 "$pid" 2>/dev/null; then
+    if [ -n "$pid" ] && ! launcher_alive "$pid" "$RUN"; then
       if [ -f "$RUN/claim" ] && claim_live "$RUN/claim"; then
         echo "LAUNCHER DIED, CODEX MAY STILL RUN: the launcher (pid $pid) is gone, but Codex's processes may not be (or it was starting under a minute ago); no receipt will be written: $(winpath "$RUN")"
         return 75
