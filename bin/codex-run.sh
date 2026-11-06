@@ -794,18 +794,19 @@ in_big() {
 # this walk nor its output can hold. Windows drive paths (C:/...) and UNC paths
 # (//server/share/...) are accepted.
 phys_path() {
-  local IFS=/ p=$1 cur="" top="" base="" comp t key s hops="" n=0 missing=false mdepth=0 r
-  local -a todo=() tt=() seen=()
+  # The names still to walk are todo[i..]. bash 3.2 can join the elements of
+  # "${a[@]}" into one word in some expansions (inside ${...+...}, slices, or
+  # with IFS changed), so IFS is changed only for the reads, and arrays are
+  # walked by index and never sliced.
+  local p=$1 cur="" top="" base="" comp t key s hops="" n=0 missing=false mdepth=0 r i=0 j rest
+  local -a todo=() tt=() seen=() next=()
   [[ $p != *$'\n'* ]] || return 1
   if $WINDOWS && [[ $p != /* || $p == *\\* ]]; then p=$(posix_spelling "$p") || return 1; fi
   case $p in /*) ;; *) p="$PWD/$p" ;; esac
   unc_root "$p" || return 1
-  read -r -a todo <<< "$p"
-  while [ ${#todo[@]} -gt 0 ]; do
-    # bash 3.2 joins the elements of a slice inside ${...+...} into one word, so
-    # the rest of the array is taken only when there is one.
-    comp=${todo[0]}
-    if [ ${#todo[@]} -gt 1 ]; then todo=("${todo[@]:1}"); else todo=(); fi
+  IFS=/ read -r -a todo <<< "$p"
+  while [ "$i" -lt ${#todo[@]} ]; do
+    comp=${todo[i]}; i=$((i + 1))
     case $comp in
       ""|.) continue ;;
       ..) [ "$cur" != "$top" ] || continue   # ".." of a root is the root
@@ -831,9 +832,8 @@ phys_path() {
       # The walk is deterministic, so meeting the same link with the same names
       # still to resolve is a loop (found early); one that keeps growing ends at
       # the limit, past which no system opens the path either.
-      # (bash 3.2 joins "${a[@]}" inside ${...+...} into one word when IFS has
-      # no space, as here, so arrays are walked by index or tested for size.)
-      key="$cur/$comp//${todo[*]-}"
+      rest=""; for ((j = i; j < ${#todo[@]}; j++)); do rest+="/${todo[j]}"; done
+      key="$cur/$comp/$rest"
       for ((s = 0; s < ${#seen[@]}; s++)); do
         [ "${seen[s]}" != "$key" ] || { printf '\n%s\n' "${hops#$'\n'}"; return 2; }
       done
@@ -847,9 +847,13 @@ phys_path() {
       [ -n "$t" ] && [[ $t != *$'\n'* ]] || return 1
       if $WINDOWS && [[ $t =~ ^[A-Za-z]: || $t == *\\* ]]; then t=$(posix_spelling "$t") || return 1; fi
       case $t in /*) unc_root "$t" || return 1; t=$p ;; esac
-      tt=(); read -r -a tt <<< "$t"
-      if [ ${#tt[@]} -gt 0 ] && [ ${#todo[@]} -gt 0 ]; then todo=("${tt[@]}" "${todo[@]}")
-      elif [ ${#tt[@]} -gt 0 ]; then todo=("${tt[@]}"); fi
+      # The link's names come before those still to walk.
+      tt=(); IFS=/ read -r -a tt <<< "$t"
+      next=()
+      for ((j = 0; j < ${#tt[@]}; j++)); do next[${#next[@]}]=${tt[j]}; done
+      for ((j = i; j < ${#todo[@]}; j++)); do next[${#next[@]}]=${todo[j]}; done
+      todo=(); for ((j = 0; j < ${#next[@]}; j++)); do todo[j]=${next[j]}; done
+      i=0
       continue
     fi
     [ -e "$cur/$comp" ] || { missing=true; mdepth=1; base=${cur:-/}; }
