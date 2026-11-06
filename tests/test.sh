@@ -7,6 +7,10 @@
 # on macOS exercises bash 3.2.
 #
 #   bash tests/test.sh
+#
+# Many variables are only read inside the check strings, which shellcheck
+# cannot see:
+# shellcheck disable=SC2034
 set -u
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -42,7 +46,14 @@ UUID=01a195e3-567d-7ee3-a95d-30a2901a57c5
 
 pass=0 fail=0 skip=0
 ok() { pass=$((pass + 1)); echo "  ok    $1"; }
-bad() { fail=$((fail + 1)); echo "  FAIL  $1"; [ -n "${2:-}" ] && echo "        $2"; }
+# A failure also shows what the launcher last wrote to stderr (the reason it
+# refused a run, say), from the newest of the files the helpers keep it in.
+bad() {
+  fail=$((fail + 1)); echo "  FAIL  $1"; [ -n "${2:-}" ] && echo "        $2"
+  local e; e=$(ls -t "$TMP"/*.err 2>/dev/null | head -n 1)
+  [ -n "$e" ] && [ -s "$e" ] && sed -e 's/^/        stderr: /' "$e" | head -n 3
+  return 0
+}
 check() { if eval "$2"; then ok "$1"; else bad "$1" "condition: $2"; fi; }
 skipped() { skip=$((skip + 1)); echo "  skip  $1"; }
 has_arg() { grep -qxF -- "$1" "$STUB_ARGS"; }
@@ -101,8 +112,7 @@ new_run() {
 # Runs `exec` on a fresh run dir; sets RUN and CODE.
 run_exec() {
   RUN=$(new_run)
-  "$SH" "$RUNNER" exec "$RUN" "$@" >/dev/null 2>&1
-  # shellcheck disable=SC2034  # read inside check strings
+  "$SH" "$RUNNER" exec "$RUN" "$@" >/dev/null 2>"$TMP/run.err"
   CODE=$?
 }
 
@@ -547,11 +557,21 @@ if ! $WINDOWS; then
   LPID=$!; sleep 1; kill -TERM "$LPID"; wait "$LPID" 2>/dev/null
   check "an interrupt stops Codex promptly and records exit 130" \
     '[ "$(cat "$RUN/exit" 2>/dev/null)" = 130 ] && [ $(( $(date +%s) - START )) -lt 15 ]'
+  # A launcher killed while Codex still runs: "may still run" (75) while its
+  # process group lives, "died" (70) once that has ended.
   RUN=$(new_run)
   STUB_SLEEP=3 "$SH" "$RUNNER" exec "$RUN" -d "$REPO" >/dev/null 2>&1 &
-  LPID=$!; sleep 1; kill -KILL "$LPID"; wait "$LPID" 2>/dev/null
+  LPID=$!
+  # Kill only once the process group is recorded (else the start grace applies).
+  for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+    grep -q '^pgid ' "$RUN/claim" 2>/dev/null && break; sleep 0.1
+  done
+  kill -KILL "$LPID"; wait "$LPID" 2>/dev/null
   "$SH" "$RUNNER" receipt "$RUN" >/dev/null 2>&1
-  check "a killed launcher is reported as died, not running" '[ $? = 70 ]'
+  check "a killed launcher whose Codex still runs is reported as possibly running" '[ $? = 75 ]'
+  sleep 4
+  "$SH" "$RUNNER" receipt "$RUN" >/dev/null 2>&1
+  check "a killed launcher is reported as died once its Codex has ended" '[ $? = 70 ]'
   sleep 3
 else skipped "signal handling (POSIX only)"; fi
 
@@ -758,8 +778,9 @@ elif ! $WINDOWS; then
 fi
 $WINDOWS || chmod 755 "$STUCK"
 # The retry finds the runs root through the recorded runs-root file.
-env -u CODEX_WORKER_RUNS "$SH" "$ROOT/install.sh" --uninstall --purge >/dev/null 2>&1
+env -u CODEX_WORKER_RUNS "$SH" "$ROOT/install.sh" --uninstall --purge >"$TMP/purge.err" 2>&1
 check "purge succeeds" '[ $? = 0 ]'
+rm -f "$TMP/purge.err"   # so a later failure does not show it as its own stderr
 check "purge removes run directories" '[ -z "$(ls -d "$RUNS"/2026* 2>/dev/null)" ]'
 check "purge keeps unrelated files in the runs root" '[ -f "$RUNS/keep.txt" ]'
 check "purge removes the marker and runs-root" '[ ! -e "$RUNS/.codex-worker-runs" ] && [ ! -e "$CLAUDE_CONFIG_DIR/codex-worker" ]'
@@ -812,9 +833,10 @@ if ! $WINDOWS; then
   check "launcher treats drive-letter paths as relative off Windows" '[ $? = 64 ]'
 fi
 if ! $WINDOWS && [ "$GIT_MINOR" -ge 42 ]; then
-  LR=$(new_repo linked-refs); mkdir -p "$TMP/elsewhere" "$LR/.git/refs/heads"; ln -s "$TMP/elsewhere" "$LR/.git/refs/heads/codex"
+  # (a folder of its own: $TMP/elsewhere holds a run dir from an earlier test)
+  LR=$(new_repo linked-refs); mkdir -p "$TMP/refs-elsewhere" "$LR/.git/refs/heads"; ln -s "$TMP/refs-elsewhere" "$LR/.git/refs/heads/codex"
   run_exec -d "$LR" -w
-  check "-w refuses git metadata dirs that link elsewhere" '[ "$CODE" = 66 ] && [ -z "$(ls -A "$TMP/elsewhere")" ]'
+  check "-w refuses git metadata dirs that link elsewhere" '[ "$CODE" = 66 ] && [ -z "$(ls -A "$TMP/refs-elsewhere")" ]'
   LF=$(new_repo linked-file); echo "# outside" > "$TMP/outside-packed"; ln -s "$TMP/outside-packed" "$LF/.git/packed-refs"
   run_exec -d "$LF" -w
   check "-w refuses linked git metadata files (packed-refs, config, reftable...)" '[ "$CODE" = 66 ] && [ "$(cat "$TMP/outside-packed")" = "# outside" ]'

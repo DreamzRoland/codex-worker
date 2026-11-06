@@ -122,8 +122,8 @@ ctl_clean() {
   LC_ALL=C tr -d '\000-\010\013-\037\177' | LC_ALL=C sed \
     -e "s/$(printf '\302')[$(printf '\200')-$(printf '\237')]//g" \
     -e "s/$(printf '\330\234')//g" \
-    -e "s/$e2$x80[$(printf '\216\217\250\251\252\253\254\255\256')]//g" \
-    -e "s/$e2$x81[$(printf '\246\247\250\251')]//g"
+    -e "s/${e2}${x80}[$(printf '\216\217\250\251\252\253\254\255\256')]//g" \
+    -e "s/${e2}${x81}[$(printf '\246\247\250\251')]//g"
 }
 
 # Git against an untrusted repository, outside Codex's sandbox: no fsmonitor, no
@@ -224,8 +224,7 @@ resolve_run() {
 # With "gitdir" as $2, checks git directory $1, which -w writes outside the
 # sandbox, against the same protected places (no temporary folders).
 check_workdir() {
-  local wd=$1 mode=${2:-} p pa w h
-  w=$(lower "$wd")
+  local wd=$1 mode=${2:-} p pa h
   [ "$wd" != / ] || die "refusing a filesystem root as working directory: $wd"
   if $WINDOWS && [[ $wd =~ ^/[a-zA-Z]/?$ || $wd =~ ^//[^/]+/[^/]+/?$ ]]; then
     die "refusing a drive or network share root as working directory: $(winpath "$wd")"
@@ -263,7 +262,7 @@ check_workdir() {
                      "$docs/PowerShell" "$docs/WindowsPowerShell")
   # Configuration that XDG programs (autostart entries included) and zsh read
   # where these variables say, rather than in the home folder.
-  local x d l found
+  local x
   [[ ${XDG_CONFIG_HOME-}${XDG_DATA_HOME-}${XDG_CONFIG_DIRS-}${ZDOTDIR-} != *$'\n'* ]] \
     || die "an XDG or ZDOTDIR variable has a newline in it; use -s read-only"
   for x in "${XDG_CONFIG_HOME-}" "${XDG_DATA_HOME-}" "${ZDOTDIR-}"; do
@@ -530,21 +529,23 @@ claims_lock_error() {
 # True while the run of claim file $1 may still write or run git: it has no
 # exit code yet (the launcher stops what is left of Codex before writing one)
 # and a process of its Codex process group is alive, or its launcher is alive,
-# or that launcher died while starting Codex (within 60 s).
+# or that launcher died while starting Codex before its group was recorded
+# (within 60 s; once a group is recorded, that group alone tells).
 claim_live() {
-  local line pid="" start="" now
+  local line pid="" start="" now grouped=false
   [ ! -e "${1%/claim}/exit" ] || return 1
   {
     while IFS= read -r line; do
       case $line in
         "pid "*) pid=${line#pid } ;;
         "starting "*) start=${line#starting } ;;
-        "pgid "*) [[ ${line#pgid } =~ ^[0-9]+$ ]] && kill -0 -- "-${line#pgid }" 2>/dev/null && return 0 ;;
+        "pgid "*) grouped=true
+                  [[ ${line#pgid } =~ ^[0-9]+$ ]] && kill -0 -- "-${line#pgid }" 2>/dev/null && return 0 ;;
       esac
     done < "$1"
   } 2>/dev/null
   [[ $pid =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null && return 0
-  [[ $start =~ ^[0-9]+$ ]] && now=$(date +%s) && [ $((now - start)) -lt 60 ]
+  ! $grouped && [[ $start =~ ^[0-9]+$ ]] && now=$(date +%s) && [ $((now - start)) -lt 60 ]
 }
 
 # True if path $1 is folder $2 or lies inside it, by spelling or by identity.
@@ -793,15 +794,19 @@ in_big() {
 # this walk nor its output can hold. Windows drive paths (C:/...) and UNC paths
 # (//server/share/...) are accepted.
 phys_path() {
-  local IFS=/ p=$1 cur="" top="" base="" comp t key s hops="" n=0 missing=false mdepth=0 r
-  local -a todo=() tt=() seen=()
+  # The names still to walk are todo[i..]. bash 3.2 can join the elements of
+  # "${a[@]}" into one word in some expansions (inside ${...+...}, slices, or
+  # with IFS changed), so IFS is changed only for the reads, and arrays are
+  # walked by index and never sliced.
+  local p=$1 cur="" top="" base="" comp t key s hops="" n=0 missing=false mdepth=0 r i=0 j rest
+  local -a todo=() tt=() seen=() next=()
   [[ $p != *$'\n'* ]] || return 1
   if $WINDOWS && [[ $p != /* || $p == *\\* ]]; then p=$(posix_spelling "$p") || return 1; fi
   case $p in /*) ;; *) p="$PWD/$p" ;; esac
   unc_root "$p" || return 1
-  read -r -a todo <<< "$p"
-  while [ ${#todo[@]} -gt 0 ]; do
-    comp=${todo[0]}; todo=(${todo[@]+"${todo[@]:1}"})
+  IFS=/ read -r -a todo <<< "$p"
+  while [ "$i" -lt ${#todo[@]} ]; do
+    comp=${todo[i]}; i=$((i + 1))
     case $comp in
       ""|.) continue ;;
       ..) [ "$cur" != "$top" ] || continue   # ".." of a root is the root
@@ -827,9 +832,10 @@ phys_path() {
       # The walk is deterministic, so meeting the same link with the same names
       # still to resolve is a loop (found early); one that keeps growing ends at
       # the limit, past which no system opens the path either.
-      key="$cur/$comp//${todo[*]-}"
-      for s in ${seen[@]+"${seen[@]}"}; do
-        [ "$s" != "$key" ] || { printf '\n%s\n' "${hops#$'\n'}"; return 2; }
+      rest=""; for ((j = i; j < ${#todo[@]}; j++)); do rest+="/${todo[j]}"; done
+      key="$cur/$comp/$rest"
+      for ((s = 0; s < ${#seen[@]}; s++)); do
+        [ "${seen[s]}" != "$key" ] || { printf '\n%s\n' "${hops#$'\n'}"; return 2; }
       done
       n=$((n + 1)); [ "$n" -le 64 ] || { printf '\n%s\n' "${hops#$'\n'}"; return 2; }
       seen+=("$key")
@@ -841,8 +847,13 @@ phys_path() {
       [ -n "$t" ] && [[ $t != *$'\n'* ]] || return 1
       if $WINDOWS && [[ $t =~ ^[A-Za-z]: || $t == *\\* ]]; then t=$(posix_spelling "$t") || return 1; fi
       case $t in /*) unc_root "$t" || return 1; t=$p ;; esac
-      read -r -a tt <<< "$t"
-      todo=(${tt[@]+"${tt[@]}"} ${todo[@]+"${todo[@]}"})
+      # The link's names come before those still to walk.
+      tt=(); IFS=/ read -r -a tt <<< "$t"
+      next=()
+      for ((j = 0; j < ${#tt[@]}; j++)); do next[${#next[@]}]=${tt[j]}; done
+      for ((j = i; j < ${#todo[@]}; j++)); do next[${#next[@]}]=${todo[j]}; done
+      todo=(); for ((j = 0; j < ${#next[@]}; j++)); do todo[j]=${next[j]}; done
+      i=0
       continue
     fi
     [ -e "$cur/$comp" ] || { missing=true; mdepth=1; base=${cur:-/}; }
@@ -1082,7 +1093,9 @@ cmd_exec() {
   # them again once the claim keeps other runs out.
   if [ "$sandbox" = workspace-write ]; then
     CLAIM_R=("${CHECKED_ROOTS[0]}")
-    if $worktree; then CLAIM_W=(${CHECKED_ROOTS[1]+"${CHECKED_ROOTS[@]:1}"}); else CLAIM_W=("${CHECKED_ROOTS[@]}"); fi
+    if ! $worktree; then CLAIM_W=("${CHECKED_ROOTS[@]}")
+    elif [ ${#CHECKED_ROOTS[@]} -gt 1 ]; then CLAIM_W=("${CHECKED_ROOTS[@]:1}")   # not in ${...+...}: see phys_path
+    else CLAIM_W=(); fi
   else
     CLAIM_R=("$(root_spelling "$wd")") CLAIM_W=()
   fi

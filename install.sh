@@ -87,8 +87,13 @@ purge_runs() {
   fi
   local d n=0 failed=0 repo real_d pid pgid pg
   for d in "$RUNS"/*; do
-    [ -d "$d" ] && [ ! -L "$d" ] || continue
     [[ $(basename "$d") =~ ^[0-9]{8}-[0-9]{6}-[0-9]+-[0-9]+$ ]] || continue
+    # A link (or junction) named like a run is removed as a link, never followed.
+    if [ -L "$d" ]; then
+      rm -f -- "$d" 2>/dev/null || rmdir -- "$d" 2>/dev/null || { warn "could not remove the link $d"; failed=1; }
+      continue
+    fi
+    [ -d "$d" ] || continue
     [ -r "$d" ] && [ -x "$d" ] || { warn "cannot read $d; fix access and purge again"; failed=1; continue; }
     read_state "$d/pid" && pid=$REPLY && read_state "$d/repo" && repo=$REPLY \
       || { warn "cannot read the state files in $d; fix access and purge again"; failed=1; continue; }
