@@ -831,9 +831,11 @@ phys_path() {
       # The walk is deterministic, so meeting the same link with the same names
       # still to resolve is a loop (found early); one that keeps growing ends at
       # the limit, past which no system opens the path either.
+      # (bash 3.2 joins "${a[@]}" inside ${...+...} into one word when IFS has
+      # no space, as here, so arrays are walked by index or tested for size.)
       key="$cur/$comp//${todo[*]-}"
-      for s in ${seen[@]+"${seen[@]}"}; do
-        [ "$s" != "$key" ] || { printf '\n%s\n' "${hops#$'\n'}"; return 2; }
+      for ((s = 0; s < ${#seen[@]}; s++)); do
+        [ "${seen[s]}" != "$key" ] || { printf '\n%s\n' "${hops#$'\n'}"; return 2; }
       done
       n=$((n + 1)); [ "$n" -le 64 ] || { printf '\n%s\n' "${hops#$'\n'}"; return 2; }
       seen+=("$key")
@@ -845,8 +847,9 @@ phys_path() {
       [ -n "$t" ] && [[ $t != *$'\n'* ]] || return 1
       if $WINDOWS && [[ $t =~ ^[A-Za-z]: || $t == *\\* ]]; then t=$(posix_spelling "$t") || return 1; fi
       case $t in /*) unc_root "$t" || return 1; t=$p ;; esac
-      read -r -a tt <<< "$t"
-      todo=(${tt[@]+"${tt[@]}"} ${todo[@]+"${todo[@]}"})
+      tt=(); read -r -a tt <<< "$t"
+      if [ ${#tt[@]} -gt 0 ] && [ ${#todo[@]} -gt 0 ]; then todo=("${tt[@]}" "${todo[@]}")
+      elif [ ${#tt[@]} -gt 0 ]; then todo=("${tt[@]}"); fi
       continue
     fi
     [ -e "$cur/$comp" ] || { missing=true; mdepth=1; base=${cur:-/}; }
