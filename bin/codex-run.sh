@@ -802,7 +802,10 @@ phys_path() {
   unc_root "$p" || return 1
   read -r -a todo <<< "$p"
   while [ ${#todo[@]} -gt 0 ]; do
-    comp=${todo[0]}; todo=(${todo[@]+"${todo[@]:1}"})
+    # bash 3.2 joins the elements of a slice inside ${...+...} into one word, so
+    # the rest of the array is taken only when there is one.
+    comp=${todo[0]}
+    if [ ${#todo[@]} -gt 1 ]; then todo=("${todo[@]:1}"); else todo=(); fi
     case $comp in
       ""|.) continue ;;
       ..) [ "$cur" != "$top" ] || continue   # ".." of a root is the root
@@ -1083,7 +1086,9 @@ cmd_exec() {
   # them again once the claim keeps other runs out.
   if [ "$sandbox" = workspace-write ]; then
     CLAIM_R=("${CHECKED_ROOTS[0]}")
-    if $worktree; then CLAIM_W=(${CHECKED_ROOTS[1]+"${CHECKED_ROOTS[@]:1}"}); else CLAIM_W=("${CHECKED_ROOTS[@]}"); fi
+    if ! $worktree; then CLAIM_W=("${CHECKED_ROOTS[@]}")
+    elif [ ${#CHECKED_ROOTS[@]} -gt 1 ]; then CLAIM_W=("${CHECKED_ROOTS[@]:1}")   # not in ${...+...}: see phys_path
+    else CLAIM_W=(); fi
   else
     CLAIM_R=("$(root_spelling "$wd")") CLAIM_W=()
   fi

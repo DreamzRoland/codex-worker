@@ -39,29 +39,6 @@ jobs:
           node --check hooks/codex-guard.mjs
           node -e 'JSON.parse(require("fs").readFileSync("schemas/findings.schema.json","utf8"))'
 
-      - name: Probe /var/tmp (diagnostic)
-        if: runner.os == 'macOS'
-        shell: bash
-        run: |
-          ls -ld / /var /tmp /var/tmp /private /private/var /private/tmp /private/var/tmp || true
-          readlink /var /tmp /var/tmp || true
-          id; echo "TMPDIR=${TMPDIR-}"; getconf DARWIN_USER_TEMP_DIR || true
-          cat > "$RUNNER_TEMP/probe.sh" <<'PROBE'
-          WINDOWS=false
-          eval "$(sed -n -e '/^phys_path() {/,/^}/p' -e '/^unc_root() {/,/^}/p' -e '/^posix_spelling() {/,/^}/p' -e '/^abspath() {/,/^}/p' bin/codex-run.sh)"
-          for t in /tmp /var/tmp; do
-            echo "== $t"
-            set -x
-            out=$(phys_path "$t"); rc=$?
-            set +x
-            printf 'rc=%s out=[%s]\n' "$rc" "$out"
-            a=${out%%$'\n'*}
-            [ -d "$a" ] && echo "is dir"; [ -x "$a" ] && echo "is searchable"
-            abspath "$a"; echo "abspath rc=$?"
-          done
-          PROBE
-          /bin/bash "$RUNNER_TEMP/probe.sh" 2>&1 | tail -80
-
       - name: Test suite
         shell: bash
         run: ${{ matrix.shell }} tests/test.sh
