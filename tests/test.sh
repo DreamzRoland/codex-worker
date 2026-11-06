@@ -561,7 +561,12 @@ if ! $WINDOWS; then
   # process group lives, "died" (70) once that has ended.
   RUN=$(new_run)
   STUB_SLEEP=3 "$SH" "$RUNNER" exec "$RUN" -d "$REPO" >/dev/null 2>&1 &
-  LPID=$!; sleep 1; kill -KILL "$LPID"; wait "$LPID" 2>/dev/null
+  LPID=$!
+  # Kill only once the process group is recorded (else the start grace applies).
+  for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+    grep -q '^pgid ' "$RUN/claim" 2>/dev/null && break; sleep 0.1
+  done
+  kill -KILL "$LPID"; wait "$LPID" 2>/dev/null
   "$SH" "$RUNNER" receipt "$RUN" >/dev/null 2>&1
   check "a killed launcher whose Codex still runs is reported as possibly running" '[ $? = 75 ]'
   sleep 4
@@ -775,7 +780,7 @@ $WINDOWS || chmod 755 "$STUCK"
 # The retry finds the runs root through the recorded runs-root file.
 env -u CODEX_WORKER_RUNS "$SH" "$ROOT/install.sh" --uninstall --purge >"$TMP/purge.err" 2>&1
 check "purge succeeds" '[ $? = 0 ]'
-{ echo "left after purge:"; for d in "$RUNS"/2026*; do [ -e "$d" ] && echo "$(basename "$d"): $(ls -A "$d" | tr '\n' ' ')"; done; } > "$TMP/purge-left.err" 2>/dev/null
+rm -f "$TMP/purge.err"   # so a later failure does not show it as its own stderr
 check "purge removes run directories" '[ -z "$(ls -d "$RUNS"/2026* 2>/dev/null)" ]'
 check "purge keeps unrelated files in the runs root" '[ -f "$RUNS/keep.txt" ]'
 check "purge removes the marker and runs-root" '[ ! -e "$RUNS/.codex-worker-runs" ] && [ ! -e "$CLAUDE_CONFIG_DIR/codex-worker" ]'
