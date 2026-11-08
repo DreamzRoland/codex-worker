@@ -665,8 +665,10 @@ check "blocks: tab-separated arguments" 'blocks Bash "$(printf "\"%s\"\tnew" "$L
 check "blocks: PowerShell without the Git Bash prefix" "blocks PowerShell '& codex.exe exec x'"
 check "blocks: PowerShell string concatenation" "blocks PowerShell '& CODEX.EXE exec (\"--yo\" + \"lo\") x'"
 check "blocks: PowerShell running the launcher without bash.exe" "blocks PowerShell '& \"$L\" new'"
-check "blocks: PowerShell with a Git Bash style /c/ executable path" \
-  '[ "$(guard_raw "{\"tool_name\":\"PowerShell\",\"tool_input\":{\"command\":\"& \\\"/c/Program Files/Git/bin/bash.exe\\\" \\\"$L\\\" new\"}}")" = 2 ]'
+# (Events are built outside the check strings: bash 3.2 misparses the nested
+# quotes and braces when they are inline.)
+J=$(printf '{"tool_name":"PowerShell","tool_input":{"command":"& \\"/c/Program Files/Git/bin/bash.exe\\" \\"%s\\" new"}}' "$L")
+check "blocks: PowerShell with a Git Bash style /c/ executable path" '[ "$(guard_raw "$J")" = 2 ]'
 check "blocks: multi-line command" 'blocks Bash "$(printf "%s\n%s" "\"$L\" new" "rm -rf /")"'
 check "blocks: Write over the guard itself" 'blocks Write "$(wp "$TMP/claude/codex-worker/codex-guard.mjs")"'
 check "blocks: Write of another file in a run dir" 'blocks Write "$R/run.sh"'
@@ -688,8 +690,10 @@ if ! $WINDOWS; then
   check "blocks: Write to a prompt.txt symlink" 'blocks Write "$RUNS_PHYS/20260101-120000-123-459/prompt.txt"'
 else skipped "POSIX symlink and backslash cases"; fi
 check "blocks: malformed hook input" '[ "$(guard_raw "not json")" = 2 ]'
-check "blocks: missing command field" '[ "$(guard_raw "{\"tool_name\":\"Bash\",\"tool_input\":{}}")" = 2 ]'
-check "blocks: tools it does not know" '[ "$(guard_raw "{\"tool_name\":\"Read\",\"tool_input\":{}}")" = 2 ]'
+J='{"tool_name":"Bash","tool_input":{}}'
+check "blocks: missing command field" '[ "$(guard_raw "$J")" = 2 ]'
+J='{"tool_name":"Read","tool_input":{}}'
+check "blocks: tools it does not know" '[ "$(guard_raw "$J")" = 2 ]'
 check "blocks: missing configuration" '[ "$(guard_raw "$(event Bash "\"$L\" new")" "$TMP/missing.json")" = 2 ]'
 
 echo "Installer"

@@ -78,8 +78,17 @@ abspath() {
 }
 [ "$(uname -s)" = Darwin ] && CASELESS=true || CASELESS=$WINDOWS   # case-insensitive file systems
 lower() { if $CASELESS; then printf '%s\n' "$1" | tr '[:upper:]' '[:lower:]'; else printf '%s\n' "$1"; fi; }
-# Removes an incomplete UTF-8 sequence left by byte-based truncation.
-utf8_clean() { if command -v iconv >/dev/null 2>&1; then iconv -c -f UTF-8 -t UTF-8 2>/dev/null; else cat; fi; }
+# Removes an incomplete UTF-8 sequence left by byte-based truncation, and any
+# other byte that is not UTF-8. perl first: macOS iconv -c keeps a sequence cut
+# off at the end. Bytes, not Encode: some Encode versions drop the character
+# after a bad byte too. Each match keeps a run of well-formed sequences and
+# drops the one byte after it, if any.
+utf8_clean() {
+  if command -v perl >/dev/null 2>&1; then
+    perl -C0 -0777 -pe 's/((?:[\x00-\x7f]|[\xc2-\xdf][\x80-\xbf]|\xe0[\xa0-\xbf][\x80-\xbf]|[\xe1-\xec\xee\xef][\x80-\xbf]{2}|\xed[\x80-\x9f][\x80-\xbf]|\xf0[\x90-\xbf][\x80-\xbf]{2}|[\xf1-\xf3][\x80-\xbf]{3}|\xf4[\x80-\x8f][\x80-\xbf]{2})*)[\x80-\xff]?/$1/g'
+  elif command -v iconv >/dev/null 2>&1; then iconv -c -f UTF-8 -t UTF-8 2>/dev/null
+  else cat; fi
+}
 # Escapes a path so it fits on one line and holds no terminal controls:
 # backslash, newline and tab, and any other control character as \xHH.
 esc() {

@@ -39,27 +39,6 @@ jobs:
           node --check hooks/codex-guard.mjs
           node -e 'JSON.parse(require("fs").readFileSync("schemas/findings.schema.json","utf8"))'
 
-      - name: Probe temporary folders (diagnostic)
-        if: runner.os == 'macOS'
-        shell: bash
-        run: |
-          cat > "$RUNNER_TEMP/probe.sh" <<'PROBE'
-          echo "bash $BASH_VERSION"
-          WINDOWS=false
-          eval "$(sed -n -e '/^phys_path() {/,/^}/p' -e '/^unc_root() {/,/^}/p' -e '/^posix_spelling() {/,/^}/p' -e '/^abspath() {/,/^}/p' bin/codex-run.sh)"
-          for t in /tmp /var/tmp /private/var/tmp "$(getconf DARWIN_USER_TEMP_DIR)"; do
-            echo "== $t"
-            out=$(phys_path "$t"); rc=$?
-            printf 'rc=%s out=[%s]\n' "$rc" "$out"
-            a=${out%%$'\n'*}
-            [ -d "$a" ] && echo "is dir"; [ -x "$a" ] && echo "is searchable"
-            abspath "$a"; echo "abspath rc=$?"
-          done
-          echo "== traced /var/tmp"
-          set -x; phys_path /var/tmp; set +x
-          PROBE
-          /bin/bash "$RUNNER_TEMP/probe.sh" 2>&1 | tail -150
-
       - name: Test suite
         shell: bash
         run: ${{ matrix.shell }} tests/test.sh

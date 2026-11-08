@@ -255,8 +255,10 @@ lexical() {
       *) out[${#out[@]}]=$part ;;
     esac
   done
-  local IFS=/
-  printf '%s%s\n' "$lead" ${out[@]+"${out[*]}"}
+  # (bash 3.2 joins "${out[*]}" with a space inside ${...+...} under IFS=/.)
+  local IFS=/ joined=""
+  [ ${#out[@]} = 0 ] || joined="${out[*]}"
+  printf '%s%s\n' "$lead" "$joined"
 }
 
 norm_path() {   # comparable form of a path: forward slashes, lower case on Windows
