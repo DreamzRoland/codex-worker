@@ -51,7 +51,7 @@ ok() { pass=$((pass + 1)); echo "  ok    $1"; }
 bad() {
   fail=$((fail + 1)); echo "  FAIL  $1"; [ -n "${2:-}" ] && echo "        $2"
   local e; e=$(ls -t "$TMP"/*.err 2>/dev/null | head -n 1)
-  [ -n "$e" ] && [ -s "$e" ] && sed -e 's/^/        stderr: /' "$e" | head -n 3
+  [ -n "$e" ] && [ -s "$e" ] && sed -e 's/^/        stderr: /' "$e" | head -n 5
   return 0
 }
 check() { if eval "$2"; then ok "$1"; else bad "$1" "condition: $2"; fi; }
@@ -445,10 +445,20 @@ check "failed run shows stderr tail" 'grep -q "stub failure" "$RUN/receipt.txt"'
 STUB_EXIT=1 STUB_BIG_STDERR=1 run_exec -d "$REPO"
 check "huge stderr is capped in the receipt" '[ "$(wc -c < "$RUN/receipt.txt")" -lt 6000 ]'
 if command -v iconv >/dev/null 2>&1; then
+  # True if file $1 is valid UTF-8; if not, says where it is not (in utf8.err).
+  utf8_ok() {
+    local n
+    iconv -f UTF-8 -t UTF-8 "$1" >/dev/null 2>"$TMP/utf8.err" && { : > "$TMP/utf8.err"; return 0; }
+    n=$(LC_ALL=C perl -0777 -ne 'print $-[0] if /(?:[\x00-\x7f]|[\xc2-\xdf][\x80-\xbf]|\xe0[\xa0-\xbf][\x80-\xbf]|[\xe1-\xec\xee\xef][\x80-\xbf]{2}|\xed[\x80-\x9f][\x80-\xbf]|\xf0[\x90-\xbf][\x80-\xbf]{2}|[\xf1-\xf3][\x80-\xbf]{3}|\xf4[\x80-\x8f][\x80-\xbf]{2})*\K[\x80-\xff]/' "$1")
+    { echo "bad byte at ${n:-?} of $(wc -c < "$1"); perl $(command -v perl) iconv $(command -v iconv)"
+      [ -n "$n" ] && od -An -tx1 -j "$(( n > 12 ? n - 12 : 0 ))" -N 32 "$1" | tr -s ' \n' ' '; echo
+      LC_ALL=C grep -n "$(printf '[\200-\377]')" "$1" | cut -c1-60 | head -n 1; } >> "$TMP/utf8.err"
+    return 1
+  }
   STUB_EXIT=1 STUB_UTF8_STDERR=1 run_exec -d "$REPO"
-  check "truncated stderr stays valid UTF-8" 'iconv -f UTF-8 -t UTF-8 "$RUN/receipt.txt" >/dev/null 2>&1'
+  check "truncated stderr stays valid UTF-8" 'utf8_ok "$RUN/receipt.txt"'
   STUB_ANSWER="x$(printf '中%.0s' $(seq 1 600))" run_exec -d "$REPO"
-  check "truncated answer preview stays valid UTF-8" 'iconv -f UTF-8 -t UTF-8 "$RUN/receipt.txt" >/dev/null 2>&1'
+  check "truncated answer preview stays valid UTF-8" 'utf8_ok "$RUN/receipt.txt"'
 else skipped "UTF-8 truncation (no iconv)"; fi
 STUB_ANSWER="$(printf '%01300d' 0)" run_exec -d "$REPO"
 check "long answers are previewed, not inlined" 'grep -q "first 1200 of" "$RUN/receipt.txt"'
