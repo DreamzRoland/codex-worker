@@ -551,22 +551,24 @@ run_exec -d "$WT" -w
 check "-w notes that uncommitted work is not included" 'grep -q "uncommitted changes" "$RUN/receipt.txt"'
 
 if ! $WINDOWS; then
+  # Signals are sent only once the run's Codex process group is recorded: a
+  # slow runner may not have started Codex after a fixed second.
+  wait_pgid() {
+    local k
+    for ((k = 0; k < 100; k++)); do grep -q '^pgid ' "$1/claim" 2>/dev/null && return 0; sleep 0.1; done
+    return 1
+  }
   # shellcheck disable=SC2034  # read inside a check string
   RUN=$(new_run); START=$(date +%s)
   STUB_SLEEP=30 "$SH" "$RUNNER" exec "$RUN" -d "$REPO" >/dev/null 2>&1 &
-  LPID=$!; sleep 1; kill -TERM "$LPID"; wait "$LPID" 2>/dev/null
+  LPID=$!; wait_pgid "$RUN"; kill -TERM "$LPID"; wait "$LPID" 2>/dev/null
   check "an interrupt stops Codex promptly and records exit 130" \
     '[ "$(cat "$RUN/exit" 2>/dev/null)" = 130 ] && [ $(( $(date +%s) - START )) -lt 15 ]'
   # A launcher killed while Codex still runs: "may still run" (75) while its
   # process group lives, "died" (70) once that has ended.
   RUN=$(new_run)
   STUB_SLEEP=3 "$SH" "$RUNNER" exec "$RUN" -d "$REPO" >/dev/null 2>&1 &
-  LPID=$!
-  # Kill only once the process group is recorded (else the start grace applies).
-  for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
-    grep -q '^pgid ' "$RUN/claim" 2>/dev/null && break; sleep 0.1
-  done
-  kill -KILL "$LPID"; wait "$LPID" 2>/dev/null
+  LPID=$!; wait_pgid "$RUN"; kill -KILL "$LPID"; wait "$LPID" 2>/dev/null
   "$SH" "$RUNNER" receipt "$RUN" >/dev/null 2>&1
   check "a killed launcher whose Codex still runs is reported as possibly running" '[ $? = 75 ]'
   sleep 4
@@ -827,8 +829,14 @@ if ! $WINDOWS && [ "$(id -u)" != 0 ]; then
 fi
 
 echo "Helpers"
+# (A function, not an inline check: bash 3.2 misparses the nested quotes and
+# braces of the sed expression inside a check string.)
+lexical_ok() {
+  ( eval "$(sed -n '/^lexical() {/,/^}/p' "$ROOT/install.sh")"; set -u
+    [ "$(lexical /a/b/../c/./d)" = /a/c/d ] && [ "$(lexical /a/..)" = / ] && [ "$(lexical C:/x/../y)" = C:/y ] )
+}
 check "lexical resolves dot segments" \
-  '( eval "$(sed -n "/^lexical() {/,/^}/p" "$ROOT/install.sh")"; set -u; [ "$(lexical /a/b/../c/./d)" = /a/c/d ] && [ "$(lexical /a/..)" = / ] && [ "$(lexical C:/x/../y)" = C:/y ] )'
+  lexical_ok
 mkdir -p "$TMP/lc"; cp "$RUNNER" "$TMP/lc/codex-run.sh"; echo "rel/runs" > "$TMP/lc/runs-root"
 "$SH" "$TMP/lc/codex-run.sh" new >/dev/null 2>&1
 check "launcher refuses a relative recorded runs root" '[ $? = 64 ]'
