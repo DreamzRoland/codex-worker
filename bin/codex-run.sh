@@ -81,11 +81,13 @@ lower() { if $CASELESS; then printf '%s\n' "$1" | tr '[:upper:]' '[:lower:]'; el
 # Removes an incomplete UTF-8 sequence left by byte-based truncation, and any
 # other byte that is not UTF-8. perl first: macOS iconv -c keeps a sequence cut
 # off at the end. Bytes, not Encode: some Encode versions drop the character
-# after a bad byte too. Each match keeps a run of well-formed sequences and
-# drops the one byte after it, if any.
+# after a bad byte too. Each match keeps a run of ASCII or one well-formed
+# sequence, or drops one other byte (no repeated group: older perls cap those
+# at 32766 rounds). Raw I/O, so a native Windows perl keeps line ends as is.
 utf8_clean() {
   if command -v perl >/dev/null 2>&1; then
-    perl -C0 -0777 -pe 's/((?:[\x00-\x7f]|[\xc2-\xdf][\x80-\xbf]|\xe0[\xa0-\xbf][\x80-\xbf]|[\xe1-\xec\xee\xef][\x80-\xbf]{2}|\xed[\x80-\x9f][\x80-\xbf]|\xf0[\x90-\xbf][\x80-\xbf]{2}|[\xf1-\xf3][\x80-\xbf]{3}|\xf4[\x80-\x8f][\x80-\xbf]{2})*)[\x80-\xff]?/$1/g'
+    perl -C0 -0777 -pe 'BEGIN { binmode STDIN; binmode STDOUT }
+      s/([\x00-\x7f]+|[\xc2-\xdf][\x80-\xbf]|\xe0[\xa0-\xbf][\x80-\xbf]|[\xe1-\xec\xee\xef][\x80-\xbf]{2}|\xed[\x80-\x9f][\x80-\xbf]|\xf0[\x90-\xbf][\x80-\xbf]{2}|[\xf1-\xf3][\x80-\xbf]{3}|\xf4[\x80-\x8f][\x80-\xbf]{2})|[\x80-\xff]/defined $1 ? $1 : ""/ge'
   elif command -v iconv >/dev/null 2>&1; then iconv -c -f UTF-8 -t UTF-8 2>/dev/null
   else cat; fi
 }
