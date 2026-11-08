@@ -444,22 +444,25 @@ check "propagates codex exit code" '[ "$CODE" = 3 ]'
 check "failed run shows stderr tail" 'grep -q "stub failure" "$RUN/receipt.txt"'
 STUB_EXIT=1 STUB_BIG_STDERR=1 run_exec -d "$REPO"
 check "huge stderr is capped in the receipt" '[ "$(wc -c < "$RUN/receipt.txt")" -lt 6000 ]'
-if command -v iconv >/dev/null 2>&1; then
+if command -v perl >/dev/null 2>&1; then
   # True if file $1 is valid UTF-8; if not, says where it is not (in utf8.err).
+  # perl, not iconv: macOS iconv sometimes fails on valid input ("Inappropriate
+  # ioctl for device"). Matched piece by piece from the start, so nothing
+  # backtracks and no repeat count limits it.
   utf8_ok() {
     local n
-    iconv -f UTF-8 -t UTF-8 "$1" >/dev/null 2>"$TMP/utf8.err" && { : > "$TMP/utf8.err"; return 0; }
-    n=$(LC_ALL=C perl -0777 -ne 'print $-[0] if /(?:[\x00-\x7f]|[\xc2-\xdf][\x80-\xbf]|\xe0[\xa0-\xbf][\x80-\xbf]|[\xe1-\xec\xee\xef][\x80-\xbf]{2}|\xed[\x80-\x9f][\x80-\xbf]|\xf0[\x90-\xbf][\x80-\xbf]{2}|[\xf1-\xf3][\x80-\xbf]{3}|\xf4[\x80-\x8f][\x80-\xbf]{2})*\K[\x80-\xff]/' "$1")
-    { echo "bad byte at ${n:-?} of $(wc -c < "$1"); perl $(command -v perl) iconv $(command -v iconv)"
-      [ -n "$n" ] && od -An -tx1 -j "$(( n > 12 ? n - 12 : 0 ))" -N 32 "$1" | tr -s ' \n' ' '; echo
-      LC_ALL=C grep -n "$(printf '[\200-\377]')" "$1" | cut -c1-60 | head -n 1; } >> "$TMP/utf8.err"
+    n=$(perl -C0 -0777 -ne 'BEGIN { binmode STDIN } 1 while /\G(?:[\x00-\x7f]+|[\xc2-\xdf][\x80-\xbf]|\xe0[\xa0-\xbf][\x80-\xbf]|[\xe1-\xec\xee\xef][\x80-\xbf]{2}|\xed[\x80-\x9f][\x80-\xbf]|\xf0[\x90-\xbf][\x80-\xbf]{2}|[\xf1-\xf3][\x80-\xbf]{3}|\xf4[\x80-\x8f][\x80-\xbf]{2})/gc; my $p = pos() // 0; print $p == length() ? "" : $p' < "$1") || n="perl failed"
+    [ -z "$n" ] && { : > "$TMP/utf8.err"; return 0; }
+    { echo "bad byte at $n of $(wc -c < "$1" | tr -d ' ')"
+      case $n in *[!0-9]*) ;; *) od -An -tx1 -j "$(( n > 12 ? n - 12 : 0 ))" -N 32 "$1" | tr -s ' \n' ' '; echo ;; esac
+    } > "$TMP/utf8.err"
     return 1
   }
   STUB_EXIT=1 STUB_UTF8_STDERR=1 run_exec -d "$REPO"
   check "truncated stderr stays valid UTF-8" 'utf8_ok "$RUN/receipt.txt"'
   STUB_ANSWER="x$(printf '中%.0s' $(seq 1 600))" run_exec -d "$REPO"
   check "truncated answer preview stays valid UTF-8" 'utf8_ok "$RUN/receipt.txt"'
-else skipped "UTF-8 truncation (no iconv)"; fi
+else skipped "UTF-8 truncation (no perl)"; fi
 STUB_ANSWER="$(printf '%01300d' 0)" run_exec -d "$REPO"
 check "long answers are previewed, not inlined" 'grep -q "first 1200 of" "$RUN/receipt.txt"'
 RUN=$(new_run); "$SH" "$RUNNER" receipt "$RUN" >/dev/null
