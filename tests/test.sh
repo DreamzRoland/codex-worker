@@ -7,6 +7,10 @@
 # on macOS exercises bash 3.2.
 #
 #   bash tests/test.sh
+#
+# Many variables are only read inside the check strings, which shellcheck
+# cannot see:
+# shellcheck disable=SC2034
 set -u
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -42,7 +46,14 @@ UUID=01a195e3-567d-7ee3-a95d-30a2901a57c5
 
 pass=0 fail=0 skip=0
 ok() { pass=$((pass + 1)); echo "  ok    $1"; }
-bad() { fail=$((fail + 1)); echo "  FAIL  $1"; [ -n "${2:-}" ] && echo "        $2"; }
+# A failure also shows what the launcher last wrote to stderr (the reason it
+# refused a run, say), from the newest of the files the helpers keep it in.
+bad() {
+  fail=$((fail + 1)); echo "  FAIL  $1"; [ -n "${2:-}" ] && echo "        $2"
+  local e; e=$(ls -t "$TMP"/*.err 2>/dev/null | head -n 1)
+  [ -n "$e" ] && [ -s "$e" ] && sed -e 's/^/        stderr: /' "$e" | head -n 5
+  return 0
+}
 check() { if eval "$2"; then ok "$1"; else bad "$1" "condition: $2"; fi; }
 skipped() { skip=$((skip + 1)); echo "  skip  $1"; }
 has_arg() { grep -qxF -- "$1" "$STUB_ARGS"; }
@@ -101,8 +112,7 @@ new_run() {
 # Runs `exec` on a fresh run dir; sets RUN and CODE.
 run_exec() {
   RUN=$(new_run)
-  "$SH" "$RUNNER" exec "$RUN" "$@" >/dev/null 2>&1
-  # shellcheck disable=SC2034  # read inside check strings
+  "$SH" "$RUNNER" exec "$RUN" "$@" >/dev/null 2>"$TMP/run.err"
   CODE=$?
 }
 
@@ -434,12 +444,25 @@ check "propagates codex exit code" '[ "$CODE" = 3 ]'
 check "failed run shows stderr tail" 'grep -q "stub failure" "$RUN/receipt.txt"'
 STUB_EXIT=1 STUB_BIG_STDERR=1 run_exec -d "$REPO"
 check "huge stderr is capped in the receipt" '[ "$(wc -c < "$RUN/receipt.txt")" -lt 6000 ]'
-if command -v iconv >/dev/null 2>&1; then
+if command -v perl >/dev/null 2>&1; then
+  # True if file $1 is valid UTF-8; if not, says where it is not (in utf8.err).
+  # perl, not iconv: macOS iconv sometimes fails on valid input ("Inappropriate
+  # ioctl for device"). Matched piece by piece from the start, so nothing
+  # backtracks and no repeat count limits it.
+  utf8_ok() {
+    local n
+    n=$(perl -C0 -0777 -ne 'BEGIN { binmode STDIN } 1 while /\G(?:[\x00-\x7f]+|[\xc2-\xdf][\x80-\xbf]|\xe0[\xa0-\xbf][\x80-\xbf]|[\xe1-\xec\xee\xef][\x80-\xbf]{2}|\xed[\x80-\x9f][\x80-\xbf]|\xf0[\x90-\xbf][\x80-\xbf]{2}|[\xf1-\xf3][\x80-\xbf]{3}|\xf4[\x80-\x8f][\x80-\xbf]{2})/gc; my $p = pos() // 0; print $p == length() ? "" : $p' < "$1") || n="perl failed"
+    [ -z "$n" ] && { : > "$TMP/utf8.err"; return 0; }
+    { echo "bad byte at $n of $(wc -c < "$1" | tr -d ' ')"
+      case $n in *[!0-9]*) ;; *) od -An -tx1 -j "$(( n > 12 ? n - 12 : 0 ))" -N 32 "$1" | tr -s ' \n' ' '; echo ;; esac
+    } > "$TMP/utf8.err"
+    return 1
+  }
   STUB_EXIT=1 STUB_UTF8_STDERR=1 run_exec -d "$REPO"
-  check "truncated stderr stays valid UTF-8" 'iconv -f UTF-8 -t UTF-8 "$RUN/receipt.txt" >/dev/null 2>&1'
+  check "truncated stderr stays valid UTF-8" 'utf8_ok "$RUN/receipt.txt"'
   STUB_ANSWER="x$(printf '中%.0s' $(seq 1 600))" run_exec -d "$REPO"
-  check "truncated answer preview stays valid UTF-8" 'iconv -f UTF-8 -t UTF-8 "$RUN/receipt.txt" >/dev/null 2>&1'
-else skipped "UTF-8 truncation (no iconv)"; fi
+  check "truncated answer preview stays valid UTF-8" 'utf8_ok "$RUN/receipt.txt"'
+else skipped "UTF-8 truncation (no perl)"; fi
 STUB_ANSWER="$(printf '%01300d' 0)" run_exec -d "$REPO"
 check "long answers are previewed, not inlined" 'grep -q "first 1200 of" "$RUN/receipt.txt"'
 RUN=$(new_run); "$SH" "$RUNNER" receipt "$RUN" >/dev/null
@@ -541,17 +564,29 @@ run_exec -d "$WT" -w
 check "-w notes that uncommitted work is not included" 'grep -q "uncommitted changes" "$RUN/receipt.txt"'
 
 if ! $WINDOWS; then
+  # Signals are sent only once the run's Codex process group is recorded: a
+  # slow runner may not have started Codex after a fixed second.
+  wait_pgid() {
+    local k
+    for ((k = 0; k < 100; k++)); do grep -q '^pgid ' "$1/claim" 2>/dev/null && return 0; sleep 0.1; done
+    return 1
+  }
   # shellcheck disable=SC2034  # read inside a check string
   RUN=$(new_run); START=$(date +%s)
   STUB_SLEEP=30 "$SH" "$RUNNER" exec "$RUN" -d "$REPO" >/dev/null 2>&1 &
-  LPID=$!; sleep 1; kill -TERM "$LPID"; wait "$LPID" 2>/dev/null
+  LPID=$!; wait_pgid "$RUN"; kill -TERM "$LPID"; wait "$LPID" 2>/dev/null
   check "an interrupt stops Codex promptly and records exit 130" \
     '[ "$(cat "$RUN/exit" 2>/dev/null)" = 130 ] && [ $(( $(date +%s) - START )) -lt 15 ]'
+  # A launcher killed while Codex still runs: "may still run" (75) while its
+  # process group lives, "died" (70) once that has ended.
   RUN=$(new_run)
   STUB_SLEEP=3 "$SH" "$RUNNER" exec "$RUN" -d "$REPO" >/dev/null 2>&1 &
-  LPID=$!; sleep 1; kill -KILL "$LPID"; wait "$LPID" 2>/dev/null
+  LPID=$!; wait_pgid "$RUN"; kill -KILL "$LPID"; wait "$LPID" 2>/dev/null
   "$SH" "$RUNNER" receipt "$RUN" >/dev/null 2>&1
-  check "a killed launcher is reported as died, not running" '[ $? = 70 ]'
+  check "a killed launcher whose Codex still runs is reported as possibly running" '[ $? = 75 ]'
+  sleep 4
+  "$SH" "$RUNNER" receipt "$RUN" >/dev/null 2>&1
+  check "a killed launcher is reported as died once its Codex has ended" '[ $? = 70 ]'
   sleep 3
 else skipped "signal handling (POSIX only)"; fi
 
@@ -645,8 +680,10 @@ check "blocks: tab-separated arguments" 'blocks Bash "$(printf "\"%s\"\tnew" "$L
 check "blocks: PowerShell without the Git Bash prefix" "blocks PowerShell '& codex.exe exec x'"
 check "blocks: PowerShell string concatenation" "blocks PowerShell '& CODEX.EXE exec (\"--yo\" + \"lo\") x'"
 check "blocks: PowerShell running the launcher without bash.exe" "blocks PowerShell '& \"$L\" new'"
-check "blocks: PowerShell with a Git Bash style /c/ executable path" \
-  '[ "$(guard_raw "{\"tool_name\":\"PowerShell\",\"tool_input\":{\"command\":\"& \\\"/c/Program Files/Git/bin/bash.exe\\\" \\\"$L\\\" new\"}}")" = 2 ]'
+# (Events are built outside the check strings: bash 3.2 misparses the nested
+# quotes and braces when they are inline.)
+J=$(printf '{"tool_name":"PowerShell","tool_input":{"command":"& \\"/c/Program Files/Git/bin/bash.exe\\" \\"%s\\" new"}}' "$L")
+check "blocks: PowerShell with a Git Bash style /c/ executable path" '[ "$(guard_raw "$J")" = 2 ]'
 check "blocks: multi-line command" 'blocks Bash "$(printf "%s\n%s" "\"$L\" new" "rm -rf /")"'
 check "blocks: Write over the guard itself" 'blocks Write "$(wp "$TMP/claude/codex-worker/codex-guard.mjs")"'
 check "blocks: Write of another file in a run dir" 'blocks Write "$R/run.sh"'
@@ -668,8 +705,10 @@ if ! $WINDOWS; then
   check "blocks: Write to a prompt.txt symlink" 'blocks Write "$RUNS_PHYS/20260101-120000-123-459/prompt.txt"'
 else skipped "POSIX symlink and backslash cases"; fi
 check "blocks: malformed hook input" '[ "$(guard_raw "not json")" = 2 ]'
-check "blocks: missing command field" '[ "$(guard_raw "{\"tool_name\":\"Bash\",\"tool_input\":{}}")" = 2 ]'
-check "blocks: tools it does not know" '[ "$(guard_raw "{\"tool_name\":\"Read\",\"tool_input\":{}}")" = 2 ]'
+J='{"tool_name":"Bash","tool_input":{}}'
+check "blocks: missing command field" '[ "$(guard_raw "$J")" = 2 ]'
+J='{"tool_name":"Read","tool_input":{}}'
+check "blocks: tools it does not know" '[ "$(guard_raw "$J")" = 2 ]'
 check "blocks: missing configuration" '[ "$(guard_raw "$(event Bash "\"$L\" new")" "$TMP/missing.json")" = 2 ]'
 
 echo "Installer"
@@ -758,8 +797,9 @@ elif ! $WINDOWS; then
 fi
 $WINDOWS || chmod 755 "$STUCK"
 # The retry finds the runs root through the recorded runs-root file.
-env -u CODEX_WORKER_RUNS "$SH" "$ROOT/install.sh" --uninstall --purge >/dev/null 2>&1
+env -u CODEX_WORKER_RUNS "$SH" "$ROOT/install.sh" --uninstall --purge >"$TMP/purge.err" 2>&1
 check "purge succeeds" '[ $? = 0 ]'
+rm -f "$TMP/purge.err"   # so a later failure does not show it as its own stderr
 check "purge removes run directories" '[ -z "$(ls -d "$RUNS"/2026* 2>/dev/null)" ]'
 check "purge keeps unrelated files in the runs root" '[ -f "$RUNS/keep.txt" ]'
 check "purge removes the marker and runs-root" '[ ! -e "$RUNS/.codex-worker-runs" ] && [ ! -e "$CLAUDE_CONFIG_DIR/codex-worker" ]'
@@ -802,8 +842,14 @@ if ! $WINDOWS && [ "$(id -u)" != 0 ]; then
 fi
 
 echo "Helpers"
+# (A function, not an inline check: bash 3.2 misparses the nested quotes and
+# braces of the sed expression inside a check string.)
+lexical_ok() {
+  ( eval "$(sed -n '/^lexical() {/,/^}/p' "$ROOT/install.sh")"; set -u
+    [ "$(lexical /a/b/../c/./d)" = /a/c/d ] && [ "$(lexical /a/..)" = / ] && [ "$(lexical C:/x/../y)" = C:/y ] )
+}
 check "lexical resolves dot segments" \
-  '( eval "$(sed -n "/^lexical() {/,/^}/p" "$ROOT/install.sh")"; set -u; [ "$(lexical /a/b/../c/./d)" = /a/c/d ] && [ "$(lexical /a/..)" = / ] && [ "$(lexical C:/x/../y)" = C:/y ] )'
+  lexical_ok
 mkdir -p "$TMP/lc"; cp "$RUNNER" "$TMP/lc/codex-run.sh"; echo "rel/runs" > "$TMP/lc/runs-root"
 "$SH" "$TMP/lc/codex-run.sh" new >/dev/null 2>&1
 check "launcher refuses a relative recorded runs root" '[ $? = 64 ]'
@@ -812,9 +858,10 @@ if ! $WINDOWS; then
   check "launcher treats drive-letter paths as relative off Windows" '[ $? = 64 ]'
 fi
 if ! $WINDOWS && [ "$GIT_MINOR" -ge 42 ]; then
-  LR=$(new_repo linked-refs); mkdir -p "$TMP/elsewhere" "$LR/.git/refs/heads"; ln -s "$TMP/elsewhere" "$LR/.git/refs/heads/codex"
+  # (a folder of its own: $TMP/elsewhere holds a run dir from an earlier test)
+  LR=$(new_repo linked-refs); mkdir -p "$TMP/refs-elsewhere" "$LR/.git/refs/heads"; ln -s "$TMP/refs-elsewhere" "$LR/.git/refs/heads/codex"
   run_exec -d "$LR" -w
-  check "-w refuses git metadata dirs that link elsewhere" '[ "$CODE" = 66 ] && [ -z "$(ls -A "$TMP/elsewhere")" ]'
+  check "-w refuses git metadata dirs that link elsewhere" '[ "$CODE" = 66 ] && [ -z "$(ls -A "$TMP/refs-elsewhere")" ]'
   LF=$(new_repo linked-file); echo "# outside" > "$TMP/outside-packed"; ln -s "$TMP/outside-packed" "$LF/.git/packed-refs"
   run_exec -d "$LF" -w
   check "-w refuses linked git metadata files (packed-refs, config, reftable...)" '[ "$CODE" = 66 ] && [ "$(cat "$TMP/outside-packed")" = "# outside" ]'
